@@ -9,7 +9,7 @@ import { getAll } from './controllers/users'
 
 const swaggerJsDoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
-const swaggerOptions = require('../swagger.config');
+const swaggerOptions = require('./swagger.config');
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
 
 
