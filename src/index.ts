@@ -6,14 +6,6 @@ import { connect } from 'mongoose';
 import routes from './routes';
 import { Console } from 'console';
 import { getAll } from './controllers/users'
-import AWS from 'aws-sdk';
-
-const s3 = new AWS.S3({
-    region: 'us-east-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-});
-  
 
 const swaggerJsDoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
@@ -40,11 +32,15 @@ app.use('/assets', express.static(path.join(__dirname,'assets'))
 
 app.use(routes);
 
-const dbUri = process.env.MONGODB_URI
-connect(dbUri as string).then(res => {
-    app.listen(port, () =>{
-        console.log(`app is running in port ${port}`)
-    })
-}).catch(e => {
-    console.log('No sirvo', e)
+app.listen(port, () =>{
+    console.log(`app is running in port ${port}`)
 })
+
+// const dbUri = process.env.MONGODB_URI
+// connect(dbUri as string).then(res => {
+//     app.listen(port, () =>{
+//         console.log(`app is running in port ${port}`)
+//     })
+// }).catch(e => {
+//     console.log('No sirvo', e)
+// })
