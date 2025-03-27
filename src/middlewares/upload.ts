@@ -9,13 +9,13 @@ const storage = diskStorage({
     }
 })
 
-const fileFilter = (req,file,cb) => {
-    const flag = file.cb(null,false);
-}
+// const fileFilter = (req,file,cb) => {
+//     const flag = file.cb(null,false);
+// }
 
 export const upload = multer({
     storage,
-    fileFilter
+    //fileFilter
 })
 
 export default upload;
