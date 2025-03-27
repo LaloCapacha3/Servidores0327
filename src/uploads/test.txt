@@ -1,0 +1,229 @@
+# Lab: Autenticación OAuth 2.0 con Keycloak en EC2 y Certificado SSL
+
+Este laboratorio te guiará paso a paso para configurar **Keycloak** como servidor de autenticación OAuth 2.0 sobre TLS/SSL en una instancia EC2. Al final, podrás validar la autenticación a través de la interfaz gráfica y una API Flask protegida con **OAuth**.
+
+## 🎯 Objetivo
+
+- Configurar Keycloak con OAuth 2.0 sobre HTTPS.
+- Crear un realm, un cliente OAuth y un usuario de prueba mediante CLI.
+- Validar la autenticación en la GUI y desde CLI con Flask.
+
+## 📌 Requisitos
+
+- **Instancia EC2** (se recomienda Ubuntu 24.04)
+- **Puertos abiertos**: `22 (SSH)`, `8443 (Keycloak)`, `5000 (Flask)`
+- Docker, Python y Flask instalados
+- Acceso como usuario con permisos de `sudo`
+
+---
+
+## 🚀 Entorno
+
+1
+
+```bash
+sudo apt update && sudo apt install -y docker.io jq python3-full openssl
+python3 -m venv myenv
+source myenv/bin/activate
+pip install flask flask-jwt-extended requests
+```
+
+2
+
+```bash
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+KEYCLOAK_DNS=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-hostname)
+export KEYCLOAK_DNS
+echo "Usando Keycloak en: $KEYCLOAK_DNS"
+```
+
+3
+
+```bash
+mkdir -p ~/keycloak_certs && cd ~/keycloak_certs
+
+openssl req -newkey rsa:2048 -nodes -keyout tls.key -x509 -days 365 -out tls.crt \
+  -subj "/CN=$KEYCLOAK_DNS"
+
+ls -altrh
+```
+
+4
+
+```bash
+sudo docker run -d --name keycloak -p 8443:8443 \
+  -v ~/keycloak_certs/tls.crt:/etc/x509/https/tls.crt \
+  -v ~/keycloak_certs/tls.key:/etc/x509/https/tls.key \
+  -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak start-dev --https-certificate-file=/etc/x509/https/tls.crt \
+  --https-certificate-key-file=/etc/x509/https/tls.key --https-port=8443 --http-host=0.0.0.0
+5
+sudo docker ps
+```
+
+6
+Validación en el navegador
+
+7
+
+```bash
+ADMIN_TOKEN=$(curl -sk -X POST "https://$KEYCLOAK_DNS:8443/realms/master/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=admin-cli" \
+  -d "username=admin" \
+  -d "password=admin" \
+  -d "grant_type=password" | jq -r .access_token)
+
+echo "Token de Admin obtenido: $ADMIN_TOKEN"
+```
+
+8
+
+```bash
+curl -sk -X POST "https://$KEYCLOAK_DNS:8443/admin/realms" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "realm": "OAuth-Demo",
+        "enabled": true
+      }'
+
+echo "Realm 'OAuth-Demo' creado correctamente"
+```
+
+9
+
+```bash
+curl -sk -X POST "https://$KEYCLOAK_DNS:8443/admin/realms/OAuth-Demo/clients" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "clientId": "OAuth-Client",
+        "enabled": true,
+        "clientAuthenticatorType": "client-secret",
+        "directAccessGrantsEnabled": true,
+        "standardFlowEnabled": true,
+        "publicClient": false,
+        "redirectUris": ["https://'$KEYCLOAK_DNS':5000/*"],
+        "webOrigins": ["https://'$KEYCLOAK_DNS':5000"]
+      }'
+
+echo "Cliente OAuth creado correctamente"
+```
+
+10
+
+```bash
+curl -sk -X POST "https://$KEYCLOAK_DNS:8443/admin/realms/OAuth-Demo/users" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "username": "testuser",
+        "enabled": true,
+        "emailVerified": true,
+        "email": "testuser@example.com"
+      }'
+
+echo "Usuario 'testuser' creado correctamente"
+```
+
+11
+
+- Crearle un password en la GUI al usuario
+- Ir a Cliente y dar click sobre la liga de la account
+- Acceder al Realm que creamos y logearnos con el usuario **testuser**
+- Va a pedir que cambiemos el password
+- Va a pedir que actualicemos nuestors datos
+- Regresamos a la otra pestaña donde tenemos el realm de master, y damos click en sessions, ahi validaremos que hay una sesion activa con el test user proveniente de nuestra dirección iP
+12
+
+```bash
+CLIENT_SECRET=$(curl -sk -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "https://$KEYCLOAK_DNS:8443/admin/realms/OAuth-Demo/clients" | jq -r '.[] | select(.clientId=="OAuth-Client") | .secret')
+
+echo "Client Secret: $CLIENT_SECRET"
+```
+
+13
+
+```bash
+cd
+
+cat <<EOF > app.py
+from flask import Flask, request, jsonify
+import requests
+
+app = Flask(__name__)
+
+# Keycloak token introspection endpoint
+KEYCLOAK_INTROSPECT_URL = "<KEYCLOAK_DNS_PLACEHOLDER>:8443/realms/OAuth-Demo/protocol/openid-connect/token/introspect"
+CLIENT_ID = "OAuth-Client"
+CLIENT_SECRET = "<CLIENT_SECRET_PLACEHOLDER>"
+
+def verify_token(token):
+    """Verify the token using Keycloak's introspection endpoint."""
+    data = {
+        "token": token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    
+    response = requests.post(KEYCLOAK_INTROSPECT_URL, data=data, headers=headers, verify=False)
+    response_json = response.json()
+
+    # If "active" is true, the token is valid
+    return response_json.get("active", False)
+
+@app.route('/secure-data', methods=['GET'])
+def secure_data():
+    """Endpoint protected by OAuth 2.0 Token Authentication."""
+    auth_header = request.headers.get('Authorization')
+    
+    if not auth_header:
+        return jsonify({"error": "Missing token"}), 401
+    
+    token = auth_header.split(" ")[1]  # Extract token from "Bearer <token>"
+
+    if verify_token(token):
+        return jsonify({"message": "Secure Data Access Granted"})
+    else:
+        return jsonify({"error": "Invalid token"}), 403
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+
+python app.py &
+```
+
+14
+
+```bash
+TOKEN=$(curl -sk -X POST "https://$KEYCLOAK_DNS:8443/realms/OAuth-Demo/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "client_id=OAuth-Client" \
+  -d "client_secret=$CLIENT_SECRET" \
+  -d "username=testuser" \
+  -d "password=testuser1234" | jq -r .access_token)
+
+echo "New Access Token: $TOKEN"
+
+echo $TOKEN | cut -d "." -f2 | base64 -d 2>/dev/null | jq .
+
+```
+
+15
+
+```bash
+curl -X GET "http://$KEYCLOAK_DNS:5000/secure-data" 
+```
+
+16
+
+```bash
+curl -X GET "http://$KEYCLOAK_DNS:5000/secure-data" -H "Authorization: Bearer $TOKEN"
+```
+
+---
